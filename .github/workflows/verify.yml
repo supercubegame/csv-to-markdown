@@ -1,0 +1,237 @@
+name: verify
+
+# 只挂 push 不够：没人推代码的时候，上游（共享回写 workflow 钉的是 @main、
+# Playwright、runner 镜像、Chromium）改了行为，而闸门仍然「全绿」，因为它压根
+# 没跑。外部结构漂移是时间驱动的，所以除了 push 还要挂定时。
+#
+# 分钟数故意不取整点（整点是平台排队高峰），有一条断言守着。
+# 频率取每天而不是每周：写得越勤，「读到的痕迹有多旧」就越不依赖两个定时之间的
+# 先后顺序,而那个顺序是个假设。cron 频率与 max_heartbeat_age_days 是一组耦合
+# 参数，manifest.json 里登记着，有等号断言钉住两头。
+on:
+  push:
+    branches: ['**']
+  schedule:
+    - cron: '23 4 * * *'
+  workflow_dispatch:
+    inputs:
+      write_heartbeat:
+        description: 手动验一次心跳链路（写进 last_manual_run，不参与新鲜度判定）
+        type: boolean
+        default: false
+
+concurrency:
+  group: verify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fast:
+    name: 快闸门
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      # 故意不写 `| tee`：管道会把闸门的退出码换成 tee 的（永远是 0），
+      # 而且改动这一行会撞上以字面量构造的变异体。脚本自己写日志文件。
+      - name: 跑快闸门
+        id: gate
+        continue-on-error: true
+        run: node scripts/verify.mjs
+      - name: 上传报告
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: report-fast
+          path: artifacts/
+          retention-days: 14
+          if-no-files-found: warn
+      - name: 失败则让 job 失败
+        if: steps.gate.outcome != 'success'
+        run: exit 1
+
+  web:
+    name: 浏览器闸门
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: 装依赖
+        run: npm install --no-audit --no-fund
+      # runner 不带中日韩字体，界面上的中文会渲染成方块。有一条断言在守。
+      - name: 装中日韩字体
+        run: sudo apt-get update && sudo apt-get install -y fonts-noto-cjk
+      - name: 装 Chromium
+        run: npx playwright install --with-deps chromium
+      - name: 跑浏览器闸门
+        id: gate
+        continue-on-error: true
+        run: node scripts/verify-web.mjs
+      - name: 上传报告
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: report-web
+          path: artifacts/
+          retention-days: 14
+          if-no-files-found: warn
+      - name: 失败则让 job 失败
+        if: steps.gate.outcome != 'success'
+        run: exit 1
+
+  heartbeat:
+    name: 写心跳
+    needs: [fast, web]
+    if: always() && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.write_heartbeat))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: 盖戳
+        env:
+          EVENT: ${{ github.event_name }}
+          FAST_RESULT: ${{ needs.fast.result }}
+          WEB_RESULT: ${{ needs.web.result }}
+        run: node scripts/write-heartbeat.mjs
+      # 这里不能写 `git diff --cached --quiet && echo ... && exit 0`：开了 set -e 之后，
+      # diff 发现有改动时返回 1，整个 && 链的退出码就是 1，步骤反而失败。
+      - name: 推回主干
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add heartbeat.json
+          if git diff --cached --quiet; then
+            echo '心跳内容没变化，不造空提交'
+            exit 0
+          fi
+          git commit -m "心跳：$EVENT 唤起了闸门"
+          git push origin HEAD:main
+
+  report:
+    name: 回报结果
+    needs: [fast, web]
+    if: always()
+    permissions:
+      contents: write
+      pull-requests: write
+    # 固定用 @main，与另外五个消费者一致。report.yml 的文件头写明了两边都钉 @main
+    # 的理由：pin SHA 会让 A 仓停在旧版、B 仓在新版，两边都绿而行为已经不同。
+    # 代价是本仓内部看不见上游漂移 —— 这条如实记在 AGENTS.md 的「测不出来的」里。
+    uses: supercubegame/ci-workflows/.github/workflows/report.yml@main
+    with:
+      node-version: '22'
+      gates: '[{"name":"快闸门","result":"${{ needs.fast.result }}"},{"name":"浏览器闸门","result":"${{ needs.web.result }}"}]'
+      composer-files: scripts/compose-report.mjs manifest.json
+      composer-entry: scripts/compose-report.mjs
+      marker: '<!-- csv2md-gate -->'
+
+  # =========================================================================
+  # 送不出结论的闸门，等于没跑。report job 内部会读回评论确认标记还在，但那是
+  # **同一个写入者在读自己**;而如果 report job 压根没被唤起，那个读回也不存在，
+  # 而「不存在的报告」不会喊。所以这里回头去 API 上独立找一次。
+  #
+  # 四个关键设计：
+  #   两条通道都查（只查一条，另一条坏掉时它会安静通过）；
+  #   钉在本次运行上（正文里必须同时含本次短 SHA 与 run id —— 「存在一条带
+  #     marker 的评论」是幂等写入的经典假绿）；
+  #   轮询别睡一觉；
+  #   自证（同一套查找器在一个必然不存在的 marker 上必须返回 0 条）。
+  #
+  # 它**不是**一条被合成进报告的闸门，所以不占用 report-* 产物名与 stdout-*
+  # 日志名那两个命名空间 —— 占用会让「集合相等」类断言红在命名上，那是假红。
+  # =========================================================================
+  attest:
+    name: 核对结论真的送达了
+    needs: [report]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/github-script@v8
+        env:
+          MARKER: '<!-- csv2md-gate -->'
+        with:
+          script: |
+            const marker = process.env.MARKER;
+            const { owner, repo } = context.repo;
+            const shortSha = context.sha.slice(0, 7);
+            const runId = String(context.runId);
+            const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+            async function findWith(needle) {
+              const hits = [];
+              const prs = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+                owner, repo, commit_sha: context.sha
+              });
+              for (const pr of prs.data) {
+                const cs = await github.paginate(github.rest.issues.listComments, {
+                  owner, repo, issue_number: pr.number, per_page: 100
+                });
+                for (const c of cs) if (c.body && c.body.includes(needle)) hits.push(`PR#${pr.number}/${c.id}`);
+              }
+              const cc = await github.paginate(github.rest.repos.listCommentsForCommit, {
+                owner, repo, commit_sha: context.sha, per_page: 100
+              });
+              for (const c of cc) if (c.body && c.body.includes(needle)) hits.push(`commit/${c.id}`);
+              return hits;
+            }
+
+            // 自证：同一套查找器在一个必然不存在的 marker 上必须返回 0 条。
+            const impossible = await findWith('<!-- csv2md-gate-does-not-exist-' + runId + ' -->');
+            if (impossible.length !== 0) {
+              throw new Error(`自证失败：不可能存在的 marker 却找到了 ${impossible.length} 条,这把尺子在骗人`);
+            }
+
+            let hits = [];
+            for (let i = 0; i < 12 && hits.length === 0; i += 1) {
+              hits = await findWith(marker);
+              if (hits.length) break;
+              await sleep(5000);
+            }
+            if (hits.length === 0) {
+              throw new Error('这次运行没有任何一条带 marker 的评论 —— 结论没送达，当作这次没跑');
+            }
+
+            // 钉在本次运行上：光「有一条带 marker 的评论」会被上一次的残留骗到。
+            const prs = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+              owner, repo, commit_sha: context.sha
+            });
+            let thisRun = false;
+            const bodies = [];
+            for (const pr of prs.data) {
+              const cs = await github.paginate(github.rest.issues.listComments, {
+                owner, repo, issue_number: pr.number, per_page: 100
+              });
+              for (const c of cs) if (c.body && c.body.includes(marker)) bodies.push(c.body);
+            }
+            const cc = await github.paginate(github.rest.repos.listCommentsForCommit, {
+              owner, repo, commit_sha: context.sha, per_page: 100
+            });
+            for (const c of cc) if (c.body && c.body.includes(marker)) bodies.push(c.body);
+            for (const b of bodies) if (b.includes(shortSha) && b.includes(runId)) thisRun = true;
+            if (!thisRun) {
+              throw new Error(`找到了 ${bodies.length} 条带 marker 的评论，但没有一条同时含本次短 SHA ${shortSha} 与 run id ${runId} —— 那是上一次的残留`);
+            }
+            core.info(`结论已送达：${hits.join(', ')}（含本次 ${shortSha} / run ${runId}）`);
