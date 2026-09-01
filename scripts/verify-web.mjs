@@ -24,6 +24,9 @@ const FIXTURE_MD = [
   '| pear  | 12   |',
 ].join('\n');
 
+// 第二份手写夹具：只多两行数据，用来做差值比较。
+const FIXTURE_CSV_4 = 'name,qty\napple,3\npear,12\nplum,7\nfig,1';
+
 const server = createServer(async (req, res) => {
   const p = decodeURIComponent(req.url.split('?')[0]);
   const file = join(ROOT, p === '/' ? 'index.html' : p.replace(/^\/+/, ''));
@@ -65,12 +68,15 @@ const type = async (csv) => {
     return Boolean(d && d.rowCount === n);
   }, csv.trim() === '' ? 0 : csv.split('\n').length);
 };
+// 超时故意压到 8 秒：第一版用的是默认 30 秒，而它在 CI 上碍到一个零尺寸元素时把
+// 整个 job 的预算燃掉了一半，而失败原因只是一句 Timeout。快失败比慢失败好读。
 const shot = async (name) => {
-  const buf = await page.locator('#preview').screenshot();
+  const buf = await page.locator('#preview').screenshot({ timeout: 8000 });
   await mkdir(join(ROOT, 'artifacts'), { recursive: true });
   await writeFile(join(ROOT, `artifacts/${name}.png`), buf);
   return { bytes: buf.length, sha: createHash('sha256').update(buf).digest('hex').slice(0, 16) };
 };
+const box = async () => page.locator('#preview').boundingBox();
 
 check('empty-state', '空状态：输出为空、预览零行、复制按钮禁用', async () => {
   await type('');
@@ -141,15 +147,41 @@ check('cjk-font-available', '运行环境真的装了中日韩字体', async () 
   ok(has, 'runner 不带中日韩字体，界面上的中文会渲染成方块 —— 装 fonts-noto-cjk');
 });
 
-check('screenshot-differs', '截图：空状态与填充状态必须是两张不同的图', async () => {
+// 空状态下 #preview 里一个节点都没有，所以它的盒子是零尺寸 —— 那才是「没画表格」
+// 的可观测形式，不是一张空图。第一版拿它去截图，当然只能超时。
+// 这一条同时是截图那条的负向孪生：空状态不许有幽灵表格。
+check('preview-box-empty-then-grows', '预览表的盒子：空状态零尺寸，行变多就变高（比差值）', async () => {
   await type('');
-  const empty = await shot('shot-empty');
+  const b0 = await box();
+  ok(b0 === null || b0.height === 0, `空状态下 #preview 居然有尺寸（${JSON.stringify(b0)}）,画了一个幽灵表格`);
   await type(FIXTURE_CSV);
-  const filled = await shot('shot-filled');
-  ok(empty.sha !== filled.sha, '两个状态的截图哈希相同,说明画面根本没更新');
-  ok(filled.bytes > 0 && empty.bytes > 0, '截图字节数为 0');
-  facts.push({ label: '截图实测字节数（空 / 填充，未设阈值）', value: `${empty.bytes} / ${filled.bytes}` });
-  facts.push({ label: '截图哈希前 16 位（空 / 填充）', value: `${empty.sha} / ${filled.sha}` });
+  const b2 = await box();
+  ok(b2 && b2.height > 0, '填了数据而 #preview 还是零尺寸：表格根本没画出来');
+  await type(FIXTURE_CSV_4);
+  const b4 = await box();
+  ok(b4.height > b2.height, `4 行的表应该比 2 行高，实测 ${b2.height} → ${b4.height}`);
+  facts.push({ label: '#preview 盒子高度实测（0 / 2 / 4 行）', value: `${b0 ? b0.height : 0} / ${b2.height} / ${b4.height}` });
+});
+
+// 截图只在两个**都有内容**的状态之间比，而且两边只差在表格行数上。
+// 如果拿整个面板去截，右边的 textarea 也在变，于是「表格压根没渲染」这个
+// 毋经会活下来 —— 那就从覆盖缺口变成了空断言。
+check('screenshot-differs', '截图：2 行与 4 行的预览必须是两张不同的图', async () => {
+  await type(FIXTURE_CSV);
+  const two = await shot('shot-2rows');
+  await type(FIXTURE_CSV_4);
+  const four = await shot('shot-4rows');
+  ok(two.sha !== four.sha, '两个状态的截图哈希相同,说明画面根本没跟上 DOM');
+  ok(two.bytes > 0 && four.bytes > 0, '截图字节数为 0');
+  facts.push({ label: '截图实测字节数（2 行 / 4 行，未设阈值）', value: `${two.bytes} / ${four.bytes}` });
+  facts.push({ label: '截图哈希前 16 位（2 行 / 4 行）', value: `${two.sha} / ${four.sha}` });
+});
+
+// 页面报错放最后注册 —— 检查按注册顺序跑，所以它看得到前面所有操作的累积结果。
+// 它也用 check() 而不是直接 push：这样整份文件的检查条数可以从源码派生，
+// 而快闸门里那条 web-count-crosscheck 靠的就是它。
+check('console-clean', '整场没有页面报错', async () => {
+  eq(consoleErrors, [], '整场出现了页面报错');
 });
 
 const results = [];
@@ -157,11 +189,6 @@ for (const c of checks) {
   try { await c.fn(); results.push({ id: c.id, kind: c.kind, name: c.name, pass: true }); }
   catch (err) { results.push({ id: c.id, kind: c.kind, name: c.name, pass: false, detail: err.message }); }
 }
-
-// 页面报错单独算一条，放最后 —— 前面的操作跑完才知道整场有没有报错。
-results.push(consoleErrors.length === 0
-  ? { id: 'console-clean', kind: 'web', name: '整场没有页面报错', pass: true }
-  : { id: 'console-clean', kind: 'web', name: '整场没有页面报错', pass: false, detail: consoleErrors.join('\n') });
 
 await browser.close();
 server.close();
