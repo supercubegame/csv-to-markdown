@@ -1,0 +1,23 @@
+{
+  "src": [
+    "app.mjs",
+    "engine.mjs"
+  ],
+  "gates": [
+    "fast",
+    "web"
+  ],
+  "marker": "<!-- csv2md-gate -->",
+  "cron": "23 4 * * *",
+  "max_heartbeat_age_days": 3,
+  "future_timestamp_tolerance_minutes": 10,
+  "obligations": [
+    {
+      "id": "heartbeat-first-tick",
+      "what": "确认定时闸门真的被平台唤起过一次（写完就搁着的断言，价值是零）",
+      "evidence": "heartbeat.json 的 last_scheduled_run 非空",
+      "due": "2026-09-09",
+      "kind": "从此以后都要保持：判据已经是一条常驻断言（heartbeat-freshness），履行后只删这条记录"
+    }
+  ]
+}

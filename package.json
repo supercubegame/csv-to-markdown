@@ -1,0 +1,14 @@
+{
+  "name": "csv-to-markdown",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "CSV 粘进去，Markdown 表格出来。纯前端单页，纯核心 + 无头浏览器验证闸门。",
+  "scripts": {
+    "verify": "node scripts/verify.mjs",
+    "verify:web": "node scripts/verify-web.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.56.1"
+  }
+}
