@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CSV → Markdown 表格</title>
+<style>
+  :root { --bg:#0f1115; --panel:#171a21; --line:#2a2f3a; --ink:#e6e8ec; --dim:#9aa3b2; --accent:#4c8dff; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.55 ui-sans-serif,system-ui,"Noto Sans CJK SC","PingFang SC",sans-serif; }
+  header { padding:20px 24px 8px; }
+  h1 { margin:0; font-size:19px; font-weight:650; }
+  header p { margin:6px 0 0; color:var(--dim); font-size:13px; }
+  main { display:grid; grid-template-columns:1fr 1fr; gap:16px; padding:16px 24px 32px; }
+  @media (max-width:820px) { main { grid-template-columns:1fr; } }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px; min-width:0; }
+  h2 { margin:0 0 10px; font-size:13px; font-weight:600; color:var(--dim); text-transform:uppercase; letter-spacing:.06em; }
+  textarea { width:100%; min-height:210px; resize:vertical; background:#0c0e13; color:var(--ink);
+    border:1px solid var(--line); border-radius:8px; padding:10px; font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; }
+  .controls { display:flex; flex-wrap:wrap; gap:12px; align-items:center; margin-bottom:10px; font-size:13px; color:var(--dim); }
+  select { background:#0c0e13; color:var(--ink); border:1px solid var(--line); border-radius:6px; padding:5px 8px; font:inherit; }
+  button { background:var(--accent); color:#fff; border:0; border-radius:7px; padding:8px 14px; font:inherit; cursor:pointer; }
+  button:disabled { background:#2a2f3a; color:#6b7280; cursor:not-allowed; }
+  button.ghost { background:transparent; color:var(--accent); border:1px solid var(--line); }
+  .meta { display:flex; gap:14px; flex-wrap:wrap; margin-top:10px; font-size:12.5px; color:var(--dim); }
+  #warnings { margin-top:10px; padding:8px 10px; border-radius:7px; background:#3b2a12; color:#ffd8a1; font-size:12.5px; }
+  .scroll { overflow:auto; max-height:260px; margin-top:12px; }
+  table { border-collapse:collapse; font-size:13px; }
+  th, td { border:1px solid var(--line); padding:5px 9px; white-space:pre-wrap; }
+  th { background:#1e222b; }
+  footer { padding:0 24px 28px; color:#6b7280; font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>CSV → Markdown 表格</h1>
+  <p>把 CSV 粘进左边，右边直接出 Markdown。全程在你的浏览器里跑，数据不上传。</p>
+</header>
+<main>
+  <section>
+    <h2>CSV 输入</h2>
+    <div class="controls">
+      <label>分隔符
+        <select id="delimiter">
+          <option value="auto">自动识别</option>
+          <option value=",">逗号 ,</option>
+          <option value=";">分号 ;</option>
+          <option value="&#9;">制表符</option>
+        </select>
+      </label>
+      <label><input type="checkbox" id="header-on" checked> 第一行是表头</label>
+      <label>对齐
+        <select id="align">
+          <option value="left">左</option>
+          <option value="center">居中</option>
+          <option value="right">右</option>
+        </select>
+      </label>
+      <button class="ghost" id="sample" type="button">填个示例</button>
+    </div>
+    <textarea id="csv-in" spellcheck="false" placeholder="name,qty&#10;apple,3"></textarea>
+    <div class="meta">
+      <span id="row-count">还没有可识别的数据</span>
+      <span>当前分隔符：<span id="delim-shown">逗号</span></span>
+    </div>
+    <div id="warnings" hidden></div>
+  </section>
+  <section>
+    <h2>Markdown 输出</h2>
+    <textarea id="md-out" readonly spellcheck="false"></textarea>
+    <div class="controls" style="margin:10px 0 0"><button id="copy" type="button" disabled>复制 Markdown</button></div>
+    <div class="scroll"><table id="preview"></table></div>
+  </section>
+</main>
+<footer>引号里的逗号、换行、成对引号，以及单元格里的竖线都处理过了。</footer>
+<script type="module" src="./src/app.mjs"></script>
+</body>
+</html>
