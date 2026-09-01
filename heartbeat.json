@@ -1,0 +1,9 @@
+{
+  "last_scheduled_run": null,
+  "last_manual_run": null,
+  "last_event": "never",
+  "last_gate_results": {
+    "fast": "unknown",
+    "web": "unknown"
+  }
+}
