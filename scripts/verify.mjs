@@ -306,13 +306,41 @@ check('agents-claude-identical', 'structure', 'CLAUDE.md 与 AGENTS.md 逐字相
   eq(rd('CLAUDE.md'), rd('AGENTS.md'), '两份规矩文件已经分叉');
 });
 
-check('docs-count-crosscheck', 'structure', '文档里写的检查条数等于实际注册的条数', () => {
+check('docs-count-crosscheck', 'structure', '文档里写的快闸门条数等于实际注册的条数', () => {
   const total = checks.length;
   for (const f of ['AGENTS.md', 'README.md']) {
-    const m = rd(f).match(/闸门共 (\d+) 条检查/);
+    const m = rd(f).match(/快闸门共 (\d+) 条检查/);
     ok(m, `${f} 里找不到那句带条数的话,正向对照失败，这条断言当场变空`);
     eq(Number(m[1]), total, `${f} 里的条数漂了。散文里的数字要么由机器生成，要么配一条等号断言`);
   }
+});
+
+// 文档里那句「浏览器闸门 N 条」之前**没有任何断言在守**，而文档另一句还写着
+// 「这两个数字都有等号断言钉着」—— 这是散文说谎的教科书形状，而且是我自己写的。
+// 快闸门是零依赖的，导不进 playwright，所以数不了“真的跑了几条”；但它数得了
+// **源码里真实的注册点**，而那是个不会跟文档一起改的证人。
+const countWebChecks = (src) =>
+  (stripCommentsAndStrings(src).match(/(^|[^.\w])check\s*\(/g) || []).length;
+
+check('web-count-crosscheck', 'structure', '文档里写的浏览器闸门条数等于源码里的注册点数', () => {
+  const src = rd('scripts/verify-web.mjs');
+  const n = countWebChecks(src);
+  ok(n >= 5, `只数到 ${n} 个注册点，先怀疑这把尺子`);
+  for (const f of ['AGENTS.md', 'README.md']) {
+    const m = rd(f).match(/浏览器闸门共 (\d+) 条检查/);
+    ok(m, `${f} 里找不到那句带浏览器闸门条数的话,正向对照失败`);
+    eq(Number(m[1]), n, `${f} 里的浏览器闸门条数漂了`);
+  }
+  fact('浏览器闸门注册点（从源码数出来的）', String(n));
+});
+
+check('web-counter-selfproof', 'structure', '数注册点的那把尺子两侧都承重', () => {
+  eq(countWebChecks("check('a', 'x', () => {});\ncheck('b', 'y', () => {});\n"), 2,
+    '正向对照：两个真注册点必须数出 2');
+  eq(countWebChecks("// check('a', 'x', () => {});\nconst s = \"check(\";\n"), 0,
+    '负向那侧：注释与字符串里的 check( 不许算注册点');
+  eq(countWebChecks('const check = (id, name, fn) => checks.push({ id, name, fn });\n'), 0,
+    '定义本身不是注册点');
 });
 
 check('no-prose-promises', 'structure', '文档里没有无人看守的散文承诺', () => {

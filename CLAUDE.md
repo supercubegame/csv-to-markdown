@@ -9,8 +9,10 @@ node scripts/verify.mjs        # 快闸门：零依赖、离线，几十秒。�
 node scripts/verify-web.mjs    # 浏览器闸门：需要 npm install + npx playwright install chromium
 ```
 
-快闸门共 41 条检查（behavior 20 / structure 17 / mutant 4），浏览器闸门 11 条。
-这两个数字有等号断言钉着（`docs-count-crosscheck`），改了检查数就得改这里。
+快闸门共 43 条检查（behavior 20 / structure 19 / mutant 4），浏览器闸门共 12 条检查。
+这两个数字各有一条等号断言钉着：`docs-count-crosscheck` 钉快闸门，`web-count-crosscheck`
+钉浏览器闸门（它数的是 `verify-web.mjs` 源码里真实的 `check()` 注册点，先剥注释与字符串）。
+后一条是补上来的:文档一度声称两个数字都有断言，而实际只钉了前一个。
 
 ## 结构
 
@@ -44,9 +46,9 @@ heartbeat.json          由 CI 写，不要手改
    断言。报告里把「量出来的」和「猜的」分开写。
 8. **散文里的数字要么由机器生成，要么配一条等号断言。** 手写 + 靠人记得改 = 一定漂。
 9. **CI 环境的问题在 CI 配置里解决，别改产品代码去迁就尺子。**
-10. **红了先怀疑尺子，不是产品。** 已经兑现过一次：`tee-needs-pipefail` 第一版没
-    剥 YAML 注释，被一句**解释这条规矩本身**的注释判红了。修法是把剥注释做进
-    扫描器，而不是约定「以后别在注释里提这些词」。
+10. **红了先怀疑尺子，不是产品。** 已经兑现过两次：`tee-needs-pipefail` 第一版没
+    剥 YAML 注释，被一句**解释这条规矩本身**的注释判红了；`screenshot-differs`
+    第一版拿一个零尺寸元素去截图，在 CI 上超时。两次的根因都在闸门自己身上。
 
 ## 耦合参数：改一个必须重算另一个
 
@@ -57,7 +59,8 @@ heartbeat.json          由 CI 写，不要手改
 | `report` 传进去的 marker | `attest` 回头查的 marker | `marker-coupling` |
 | `src/` 下的实际文件 | `manifest.json` 的 `src` | `src-manifest-equal` |
 | `report-*` 产物名 | `manifest.json` 的 `gates` | `gates-manifest-equal` |
-| 注册的检查条数 | AGENTS.md / README.md 里那句话 | `docs-count-crosscheck` |
+| 快闸门注册的条数 | AGENTS.md / README.md 里那句话 | `docs-count-crosscheck` |
+| `verify-web.mjs` 里的 `check()` 注册点 | AGENTS.md / README.md 里那句话 | `web-count-crosscheck` |
 
 `marker` 注定要写两遍：可复用 workflow 的 `with:` 读不到 `env` 上下文。
 所以它是一组有断言看守的耦合参数，不是可以「记得同时改两处」的东西。
@@ -84,6 +87,12 @@ workflow 文件一个字都不会变 —— 「读配置确认 cron 还在」会
 保持绿色。「没有坏消息」和「已经死了」长得一样，带时间戳的痕迹不会。
 防自触发靠结构（只在 schedule / 显式手动时写），不靠提交信息里的字符串。
 
+**零尺寸元素截不了图。** 空状态下 `#preview` 里一个节点都没有，元素不可见，
+无头浏览器会等它稳定直到超时。**零尺寸才是「没画表格」的可观测形式，不是一张空图。**
+所以截图只在两个都有内容的状态（2 行 vs 4 行）之间比，而且两边只差在行数上 ——
+拿整个面板去截的话，textarea 也在变，「表格压根没渲染」那个变异体会活下来。
+空状态改成断言盒子为零，那是它的负向孪生。
+
 **`attest` 是独立的送达核对。** `report` job 内部会读回评论，但那是同一个写入者在读
 自己；如果 `report` 压根没被唤起，那个读回也不存在，而不存在的报告不会喊。
 `attest` 两条通道都查、钉在本次短 SHA 与 run id 上、轮询而不睡一觉、并且在一个
@@ -101,6 +110,9 @@ workflow 文件一个字都不会变 —— 「读配置确认 cron 还在」会
   不是栅格化正确 —— 方块字也有像素，探针像素数、背景色令牌、截图哈希全都对得上。
   这一半已经从「整件事都拿不到」收窄成「字体这一半拿到了，字形那一半还没有」。
   真要补，需要 OCR，而快闸门是零依赖的。
+- **浏览器闸门在沙箱里跑不了，CI 是它唯一的尺子。** 没有浏览器二进制也拉不下来，
+  所以对它的任何修改都是「本地只验了语法」，真正的判定在 CI 上。不要把它当成
+  跑过的。
 - **CI 的用量 / 计费页面读不到。** 仓库是公开的，托管 runner 目前免费无限，所以
   这件事此刻不咬人。但「每月烧多少」只能是估算，不许写成实测。
 - **链条最后一环没人看着。** `attest` 检查 `report`，而 `attest` 自己只由 CI 的红绿
